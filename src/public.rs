@@ -149,6 +149,12 @@ pub enum MouseButton {
     OtherButton(u32),
 }
 
+#[derive(Debug, Eq, PartialEq, Hash, Copy, Clone, EnumIter)]
+pub enum MouseEvent {
+    Move { x: i32, y: i32 },
+    Wheel { z_delta: i16 },
+}
+
 pub struct MouseCursor;
 
 pub struct MouseWheel;
@@ -339,21 +345,21 @@ impl std::fmt::Display for KeybdKey {
 
 impl MouseButton {
     pub fn bind<F: Fn() + Send + Sync + 'static>(self, callback: F) {
-        MOUSE_BINDS
+        MOUSE_BUTTON_BINDS
             .lock()
             .unwrap()
             .insert(self, Bind::Normal(Arc::new(callback)));
     }
 
     pub fn block_bind<F: Fn() + Send + Sync + 'static>(self, callback: F) {
-        MOUSE_BINDS
+        MOUSE_BUTTON_BINDS
             .lock()
             .unwrap()
             .insert(self, Bind::Block(Arc::new(callback)));
     }
 
     pub fn blockable_bind<F: Fn() -> BlockInput + Send + Sync + 'static>(self, callback: F) {
-        MOUSE_BINDS
+        MOUSE_BUTTON_BINDS
             .lock()
             .unwrap()
             .insert(self, Bind::Blockable(Arc::new(callback)));
@@ -366,7 +372,7 @@ impl MouseButton {
                 callback(btn);
             };
 
-            MOUSE_BINDS
+            MOUSE_BUTTON_BINDS
                 .lock()
                 .unwrap()
                 .insert(btn, Bind::Normal(Arc::new(fire)));
@@ -374,7 +380,7 @@ impl MouseButton {
     }
 
     pub fn unbind(self) {
-        MOUSE_BINDS.lock().unwrap().remove(&self);
+        MOUSE_BUTTON_BINDS.lock().unwrap().remove(&self);
     }
 }
 
@@ -390,6 +396,63 @@ impl std::fmt::Display for MouseButton {
                 MouseButton::X1Button => "Mouse Backward",
                 MouseButton::X2Button => "Mouse Forward",
                 MouseButton::OtherButton(code) => return write!(f, "{code} Click"),
+            }
+        )
+    }
+}
+
+impl MouseEvent {
+    pub fn bind<F: Fn(MouseEvent) + Send + Sync + 'static>(self, callback: F) {
+        MOUSE_EVENT_BINDS
+            .lock()
+            .unwrap()
+            .insert(self, MouseEventBind::Normal(Arc::new(callback)));
+    }
+
+    pub fn block_bind<F: Fn(MouseEvent) + Send + Sync + 'static>(self, callback: F) {
+        MOUSE_EVENT_BINDS
+            .lock()
+            .unwrap()
+            .insert(self, MouseEventBind::Block(Arc::new(callback)));
+    }
+
+    pub fn blockable_bind<F: Fn(MouseEvent) -> BlockInput + Send + Sync + 'static>(
+        self,
+        callback: F,
+    ) {
+        MOUSE_EVENT_BINDS
+            .lock()
+            .unwrap()
+            .insert(self, MouseEventBind::Blockable(Arc::new(callback)));
+    }
+
+    pub fn bind_all<F: Fn(MouseEvent) + Send + Sync + Clone + 'static>(callback: F) {
+        for event in MouseEvent::iter() {
+            let callback = callback.clone();
+            let fire = move |e| {
+                callback(e);
+            };
+
+            MOUSE_EVENT_BINDS
+                .lock()
+                .unwrap()
+                .insert(event, MouseEventBind::Normal(Arc::new(fire)));
+        }
+    }
+
+    pub fn unbind(self) {
+        MOUSE_EVENT_BINDS.lock().unwrap().remove(&self);
+    }
+}
+
+impl std::fmt::Display for MouseEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                MouseEvent::Move { x, y } => format!("Mouse Move ({}, {})", x, y),
+                MouseEvent::Wheel { z_delta } => format!("Mouse Wheel ({})", z_delta),
             }
         )
     }

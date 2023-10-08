@@ -20,8 +20,8 @@ use windows::Win32::{
         WindowsAndMessaging::{
             CallNextHookEx, GetCursorPos, GetMessageW, SetCursorPos, SetWindowsHookExW,
             UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL,
-            WH_MOUSE_LL, WINDOWS_HOOK_ID, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
-            WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_XBUTTONDOWN, XBUTTON1, XBUTTON2,
+            WH_MOUSE_LL, WINDOWS_HOOK_ID, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEMOVE,
+            WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_XBUTTONDOWN, XBUTTON1, XBUTTON2,
         },
     },
 };
@@ -120,8 +120,11 @@ impl MouseWheel {
 
 /// Starts listening for bound input events.
 pub fn handle_input_events() {
-    if !MOUSE_BINDS.lock().unwrap().is_empty() {
-        set_hook(WH_MOUSE_LL, &MOUSE_HHOOK, mouse_proc);
+    if !MOUSE_BUTTON_BINDS.lock().unwrap().is_empty() {
+        set_hook(WH_MOUSE_LL, &MOUSE_HHOOK, mouse_button_proc);
+    };
+    if !MOUSE_EVENT_BINDS.lock().unwrap().is_empty() {
+        set_hook(WH_MOUSE_LL, &MOUSE_HHOOK, mouse_event_proc);
     };
     if !KEYBD_BINDS.lock().unwrap().is_empty() {
         set_hook(WH_KEYBOARD_LL, &KEYBD_HHOOK, keybd_proc);
@@ -170,8 +173,12 @@ fn hiword(l: DWORD) -> WORD {
     ((l >> 16) & 0xffff) as WORD
 }
 
-unsafe extern "system" fn mouse_proc(code: c_int, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
-    if MOUSE_BINDS.lock().unwrap().is_empty() {
+unsafe extern "system" fn mouse_button_proc(
+    code: c_int,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if MOUSE_BUTTON_BINDS.lock().unwrap().is_empty() {
         unset_hook(&MOUSE_HHOOK);
     } else if let Some(event) = match w_param.0 as u32 {
         WM_LBUTTONDOWN => Some(MouseButton::LeftButton),
@@ -188,7 +195,7 @@ unsafe extern "system" fn mouse_proc(code: c_int, w_param: WPARAM, l_param: LPAR
         }
         _ => None,
     } {
-        if let Some(bind) = MOUSE_BINDS.lock().unwrap().get_mut(&event) {
+        if let Some(bind) = MOUSE_BUTTON_BINDS.lock().unwrap().get_mut(&event) {
             match bind {
                 Bind::Normal(cb) => {
                     let cb = Arc::clone(cb);
@@ -201,6 +208,56 @@ unsafe extern "system" fn mouse_proc(code: c_int, w_param: WPARAM, l_param: LPAR
                 }
                 Bind::Blockable(cb) => {
                     if let BlockInput::Block = cb() {
+                        return LRESULT(1);
+                    }
+                }
+            }
+        };
+    }
+    CallNextHookEx(None, code, w_param, l_param)
+}
+
+unsafe extern "system" fn mouse_event_proc(
+    code: c_int,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if MOUSE_EVENT_BINDS.lock().unwrap().is_empty() {
+        unset_hook(&MOUSE_HHOOK);
+    } else if let Some(event) = match w_param.0 as u32 {
+        WM_MOUSEMOVE => {
+            let llhs = &*(l_param.0 as *const MSLLHOOKSTRUCT);
+
+            Some(MouseEvent::Move {
+                x: llhs.pt.x,
+                y: llhs.pt.y,
+            })
+        }
+        WM_MOUSEWHEEL => {
+            let llhs = &*(l_param.0 as *const MSLLHOOKSTRUCT);
+            let z_delta = hiword(llhs.mouseData) as i16;
+
+            Some(MouseEvent::Wheel { z_delta })
+        }
+        _ => None,
+    } {
+        let default_event = match event {
+            MouseEvent::Move { .. } => MouseEvent::Move { x: 0, y: 0 },
+            MouseEvent::Wheel { .. } => MouseEvent::Wheel { z_delta: 0 },
+        };
+        if let Some(bind) = MOUSE_EVENT_BINDS.lock().unwrap().get_mut(&default_event) {
+            match bind {
+                MouseEventBind::Normal(cb) => {
+                    let cb = Arc::clone(cb);
+                    spawn(move || cb(event));
+                }
+                MouseEventBind::Block(cb) => {
+                    let cb = Arc::clone(cb);
+                    spawn(move || cb(event));
+                    return LRESULT(1);
+                }
+                MouseEventBind::Blockable(cb) => {
+                    if let BlockInput::Block = cb(event) {
                         return LRESULT(1);
                     }
                 }
